@@ -6,6 +6,9 @@ import sys
 import json
 import urllib2
 import argparse
+import math
+import re
+import string
 
 from calendar import Calendar
 from datetime import date, datetime, timedelta
@@ -24,6 +27,9 @@ HOLIDAYS = [
     {'day': 25, 'month': 12, 'description': 'Natal'},
 ]
 
+
+spark_chars = u"▁▂▃▄▅▆▇█"
+"""Eight unicode characters of (nearly) steadily increasing height."""
 
 def import_mssql_connector():
     """
@@ -64,8 +70,57 @@ def install_dependencies():
     # Tenta importar novamente... loop ∞ ?
     import_mssql_connector()
 
+def _convert_to_float(i):
+    try:
+        return float(i)
+    except:
+        return None
 
-def show_movements():
+def sparkify(series):
+    u"""Converts <series> to a sparkline string.
+    
+    Example:
+    >>> sparkify([ 0.5, 1.2, 3.5, 7.3, 8.0, 12.5, 13.2, 15.0, 14.2, 11.8, 6.1,
+    ... 1.9 ])
+    u'▁▁▂▄▅▇▇██▆▄▂'
+
+    >>> sparkify([1, 1, -2, 3, -5, 8, -13])
+    u'▆▆▅▆▄█▁'
+
+    Raises ValueError if input data cannot be converted to float.
+    Raises TypeError if series is not an iterable.
+    """
+    series = [ float(i) for i in series ]
+    minimum = min(series)
+    maximum = max(series)
+    data_range = maximum - minimum
+    if data_range == 0.0:
+        # Graph a baseline if every input value is equal.
+        return u''.join([ spark_chars[0] for i in series ])
+    coefficient = (len(spark_chars) - 1.0) / data_range
+    return u''.join([
+        spark_chars[
+            int(round((x - minimum) * coefficient))
+        ] for x in series
+    ])
+
+def guess_series(input_string):
+    u"""Tries to convert <input_string> into a list of floats.
+
+    Example:
+    >>> guess_series("0.5 1.2 3.5 7.3 8 12.5, 13.2,"
+    ... "15.0, 14.2, 11.8, 6.1, 1.9")
+    [0.5, 1.2, 3.5, 7.3, 8.0, 12.5, 13.2, 15.0, 14.2, 11.8, 6.1, 1.9]
+    """
+    float_finder = re.compile("([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
+    return ([
+        i for i in [
+            _convert_to_float(j) for j in float_finder.findall(input_string)
+        # Remove entires we couldn't convert to a sensible value.
+        ] if i is not None and not math.isnan(i) and not math.isinf(i)
+    ])
+
+def get_movements():
     """
     Exibe movimentações.
     """
@@ -80,6 +135,30 @@ def show_movements():
     cursor.execute(query)
     rows = cursor.fetchall()
     connection.close()
+
+    return rows
+
+def show_movements_sarkline():
+    rows = get_movements()
+
+    movements = {}
+    movements['employee_name'] = rows[0][2] if len(rows) > 0 else ""
+    
+    chart_data = ""
+    month_consolidated_hours = timedelta()
+    for row in rows:
+        row = format_row(row)
+        current = float(row['formatted_consolidated_hours'].replace('h','.')) - 8.0
+        chart_data = "%s %d" % (chart_data, current)
+
+    output = sparkify(guess_series(chart_data))
+    print output.encode('utf-8', 'ignore')
+    print("\n\n")
+
+
+
+def show_movements():
+    rows = get_movements()
 
     # Funcionário
     employee_name = rows[0][2] if len(rows) > 0 else ""
@@ -122,6 +201,9 @@ def show_movements():
 
     # Exibe entradas e saidas
     print(tabulate.tabulate(table, headers, tablefmt="orgtbl") + "\n\n")
+
+    # Exibe spirkelines
+    show_movements_sarkline()
 
     # Exibe feriados do mês caso existam.
     show_holidays()
@@ -270,6 +352,10 @@ def format_row(row):
 
     # Horas extras só são contabilizadas a partir de 8h e 11 minutos trabalhados.
     if consolidated_hours > timedelta(hours=8) and consolidated_hours < timedelta(hours=8, minutes=11):
+        consolidated_hours = timedelta(hours=8)
+
+    # Horas negativas só são contabilizadas se abaixo de 7h e 49 minutos trabalhados.
+    if consolidated_hours < timedelta(hours=8) and consolidated_hours < timedelta(hours=7, minutes=49):
         consolidated_hours = timedelta(hours=8)
 
     hours = consolidated_hours.seconds / 3600
