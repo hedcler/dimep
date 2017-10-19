@@ -152,8 +152,8 @@ def show_movements_sarkline():
         chart_data = "%s %d" % (chart_data, current)
 
     output = sparkify(guess_series(chart_data))
-    print output.encode('utf-8', 'ignore')
-    print("\n\n")
+    print "CONSOLIDADO: %s" % output.encode('utf-8', 'ignore')
+    print("\n")
 
 
 
